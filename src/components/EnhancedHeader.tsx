@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Menu, X, LogOut, User, Settings, Search } from "lucide-react";
+import { Menu, X, LogOut, User, Settings, Search, Zap } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import NotificationSystem from "./NotificationSystem";
 
@@ -75,6 +75,15 @@ const EnhancedHeader: React.FC = () => {
                   Vendor Portal
                 </Link>
                 
+                {/* Super Dashboard Link */}
+                <Link
+                  to="/super-dashboard"
+                  className="flex items-center space-x-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-white px-4 py-2 rounded-lg font-semibold hover:from-cyan-600 hover:to-blue-600 transition-all duration-200"
+                >
+                  <Zap size={16} />
+                  <span>Super Dashboard</span>
+                </Link>
+                
                 {/* Search Icon */}
                 <button className="text-gray-300 hover:text-white transition-colors duration-200">
                   <Search size={20} />
@@ -100,12 +109,26 @@ const EnhancedHeader: React.FC = () => {
                       <div className="px-4 py-2 border-b border-slate-700">
                         <p className="text-white text-sm font-semibold">{user?.name}</p>
                         <p className="text-gray-400 text-xs">{user?.email}</p>
+                        <p className="text-orange-400 text-xs capitalize">{user?.role}</p>
                       </div>
                       
-                      <button className="w-full text-left px-4 py-2 text-gray-300 hover:text-white hover:bg-slate-700 transition-colors flex items-center space-x-2">
+                      <Link
+                        to="/dashboard"
+                        className="w-full text-left px-4 py-2 text-gray-300 hover:text-white hover:bg-slate-700 transition-colors flex items-center space-x-2"
+                        onClick={() => setShowUserMenu(false)}
+                      >
                         <User size={16} />
-                        <span>Profile</span>
-                      </button>
+                        <span>Dashboard</span>
+                      </Link>
+                      
+                      <Link
+                        to="/super-dashboard"
+                        className="w-full text-left px-4 py-2 text-gray-300 hover:text-white hover:bg-slate-700 transition-colors flex items-center space-x-2"
+                        onClick={() => setShowUserMenu(false)}
+                      >
+                        <Zap size={16} />
+                        <span>Super Dashboard</span>
+                      </Link>
                       
                       <button className="w-full text-left px-4 py-2 text-gray-300 hover:text-white hover:bg-slate-700 transition-colors flex items-center space-x-2">
                         <Settings size={16} />
@@ -171,6 +194,13 @@ const EnhancedHeader: React.FC = () => {
                     onClick={() => setIsMenuOpen(false)}
                   >
                     Vendor Portal
+                  </Link>
+                  <Link
+                    to="/super-dashboard"
+                    className="text-gray-300 hover:text-white transition-colors duration-200 font-medium"
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    Super Dashboard
                   </Link>
                   <button
                     onClick={() => {
