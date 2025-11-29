@@ -11,6 +11,7 @@ import Login from "./pages/Login";
 import CustomerPortal from "./pages/CustomerPortal";
 import VendorPortal from "./pages/VendorPortal";
 import EnhancedDashboard from "./pages/EnhancedDashboard";
+import SuperDashboard from "./pages/SuperDashboard";
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated } = useAuth();
@@ -48,6 +49,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <EnhancedDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/super-dashboard"
+          element={
+            <ProtectedRoute>
+              <SuperDashboard />
             </ProtectedRoute>
           }
         />
