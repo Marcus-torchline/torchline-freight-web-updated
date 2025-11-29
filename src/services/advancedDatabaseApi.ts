@@ -1,325 +1,513 @@
-import { DatabaseAPI } from "./databaseApi";
-import { QuoteApproval, PriceCalculation, FileMetadata, AnalyticsData, RealtimeUpdate, Message, ShipmentTracking, Report } from "../types/AdvancedFeatures";
-import { DatabaseResponse } from "../types/Database";
+import axios from 'axios';
 
-export class AdvancedDatabaseAPI extends DatabaseAPI {
-  async approveQuote(quoteId: string, approvedBy: string, priceCalculation: PriceCalculation): Promise<DatabaseResponse> {
-    try {
-      const approval: QuoteApproval = {
-        id: `approval_${Date.now()}`,
-        quoteId,
-        status: "approved",
-        approvedBy,
-        approvedAt: new Date().toISOString(),
-        version: 1,
-        priceCalculation,
-        emailNotifications: []
-      };
+export interface DatabaseRecord {
+  id: string;
+  data: any;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+}
 
-      const response = await this.createData("quote_approvals", approval, ["approval", "approved"]);
-      
-      if (response.success) {
-        await this.updateData(quoteId, { status: "approved", approvedAt: new Date().toISOString() }, ["quote", "approved"], true);
-        await this.sendEmailNotification(quoteId, "approved", approvedBy);
-      }
+export interface QueryOptions {
+  limit?: number;
+  offset?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  filters?: Record<string, any>;
+}
 
-      return response;
-    } catch (error: any) {
-      return { success: false, error: error.message || "Failed to approve quote" };
-    }
+export interface AnalyticsData {
+  totalRecords: number;
+  recordsByTag: Record<string, number>;
+  recentActivity: Array<{
+    action: string;
+    timestamp: string;
+    recordId: string;
+    user: string;
+  }>;
+  performanceMetrics: {
+    averageResponseTime: number;
+    successRate: number;
+    errorRate: number;
+  };
+}
+
+export class AdvancedDatabaseAPI {
+  private baseURL: string;
+  private userEmail: string;
+  private apiKey: string;
+
+  constructor(userEmail: string) {
+    this.baseURL = 'https://api.blick.dev';
+    this.userEmail = userEmail;
+    this.apiKey = process.env.REACT_APP_BLICK_API_KEY || 'demo-key';
   }
 
-  async rejectQuote(quoteId: string, rejectedBy: string, reason: string): Promise<DatabaseResponse> {
-    try {
-      const approval: QuoteApproval = {
-        id: `approval_${Date.now()}`,
-        quoteId,
-        status: "rejected",
-        rejectedBy,
-        rejectedAt: new Date().toISOString(),
-        rejectionReason: reason,
-        version: 1,
-        priceCalculation: { basePrice: 0, additionalFees: [], discounts: [], totalPrice: 0, currency: "USD", calculatedAt: new Date().toISOString() },
-        emailNotifications: []
-      };
-
-      const response = await this.createData("quote_approvals", approval, ["approval", "rejected"]);
-      
-      if (response.success) {
-        await this.updateData(quoteId, { status: "rejected", rejectedAt: new Date().toISOString(), rejectionReason: reason }, ["quote", "rejected"], true);
-        await this.sendEmailNotification(quoteId, "rejected", rejectedBy);
-      }
-
-      return response;
-    } catch (error: any) {
-      return { success: false, error: error.message || "Failed to reject quote" };
-    }
-  }
-
-  async calculatePrice(serviceType: string, details: any): Promise<PriceCalculation> {
-    const basePrices: any = {
-      "ocean": 1500,
-      "air": 500,
-      "ground": 300,
-      "warehouse": 200,
-      "customs": 150,
-      "specialized": 1000
-    };
-
-    const basePrice = basePrices[serviceType] || 500;
-    const additionalFees = [];
-    const discounts = [];
-
-    if (details.weight && details.weight > 1000) {
-      additionalFees.push({ name: "Heavy Weight Fee", amount: 200, type: "weight" });
-    }
-
-    if (details.timeline === "ASAP") {
-      additionalFees.push({ name: "Express Service", amount: 300, type: "express" });
-    }
-
-    if (details.palletCount && details.palletCount > 10) {
-      discounts.push({ name: "Volume Discount", amount: 100, percentage: 5 });
-    }
-
-    const totalFees = additionalFees.reduce((sum, fee) => sum + fee.amount, 0);
-    const totalDiscounts = discounts.reduce((sum, discount) => sum + discount.amount, 0);
-    const totalPrice = basePrice + totalFees - totalDiscounts;
-
+  private getHeaders() {
     return {
-      basePrice,
-      additionalFees,
-      discounts,
-      totalPrice,
-      currency: "USD",
-      calculatedAt: new Date().toISOString()
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.apiKey}`,
+      'X-User-Email': this.userEmail
     };
   }
 
-  async sendEmailNotification(quoteId: string, status: string, actionBy: string): Promise<DatabaseResponse> {
+  async createData(collection: string, data: any, tags: string[] = []): Promise<DatabaseRecord> {
     try {
-      const notification = {
-        quoteId,
-        to: "customer@example.com",
-        subject: `Quote ${status.toUpperCase()}`,
-        body: `Your quote has been ${status} by ${actionBy}`,
-        sentAt: new Date().toISOString(),
-        status: "sent"
-      };
-
-      return await this.createData("email_notifications", notification, ["notification", status]);
-    } catch (error: any) {
-      return { success: false, error: error.message || "Failed to send notification" };
+      const response = await axios.post(
+        `${this.baseURL}/collections/${collection}/records`,
+        {
+          data,
+          tags,
+          createdBy: this.userEmail
+        },
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error creating data:', error);
+      throw new Error('Failed to create data');
     }
   }
 
-  async uploadFileWithMetadata(file: File, category: string, uploadedBy: string, expiresInDays?: number): Promise<DatabaseResponse> {
+  async readData(collection: string, options: QueryOptions = {}): Promise<DatabaseRecord[]> {
     try {
-      const fileUrl = await this.uploadFileToCloud(file);
+      const params = new URLSearchParams();
       
-      const metadata: FileMetadata = {
-        id: `file_${Date.now()}`,
-        fileName: file.name,
-        fileType: file.type,
-        fileSize: file.size,
-        fileUrl,
-        category,
-        uploadedBy,
-        uploadedAt: new Date().toISOString(),
-        expiresAt: expiresInDays ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000).toISOString() : undefined,
-        tags: [category, file.type.split("/")[0]],
-        previewUrl: file.type.startsWith("image") ? fileUrl : undefined
-      };
+      if (options.limit) params.append('limit', options.limit.toString());
+      if (options.offset) params.append('offset', options.offset.toString());
+      if (options.sortBy) params.append('sortBy', options.sortBy);
+      if (options.sortOrder) params.append('sortOrder', options.sortOrder);
+      if (options.filters) {
+        Object.entries(options.filters).forEach(([key, value]) => {
+          params.append(`filter[${key}]`, value.toString());
+        });
+      }
 
-      return await this.createData("file_metadata", metadata, ["file", category]);
-    } catch (error: any) {
-      return { success: false, error: error.message || "Failed to upload file" };
+      const response = await axios.get(
+        `${this.baseURL}/collections/${collection}/records?${params.toString()}`,
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error reading data:', error);
+      throw new Error('Failed to read data');
     }
   }
 
-  async uploadFileToCloud(file: File): Promise<string> {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.readAsDataURL(file);
+  async updateData(recordId: string, data: any, tags: string[] = []): Promise<DatabaseRecord> {
+    try {
+      const response = await axios.put(
+        `${this.baseURL}/records/${recordId}`,
+        {
+          data,
+          tags,
+          updatedBy: this.userEmail
+        },
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error updating data:', error);
+      throw new Error('Failed to update data');
+    }
+  }
+
+  async deleteData(recordId: string): Promise<boolean> {
+    try {
+      await axios.delete(
+        `${this.baseURL}/records/${recordId}`,
+        { headers: this.getHeaders() }
+      );
+      return true;
+    } catch (error) {
+      console.error('Error deleting data:', error);
+      throw new Error('Failed to delete data');
+    }
+  }
+
+  async searchByTags(tags: string[], collection?: string): Promise<DatabaseRecord[]> {
+    try {
+      const params = new URLSearchParams();
+      tags.forEach(tag => params.append('tags', tag));
+      if (collection) params.append('collection', collection);
+
+      const response = await axios.get(
+        `${this.baseURL}/search/tags?${params.toString()}`,
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error searching by tags:', error);
+      throw new Error('Failed to search by tags');
+    }
+  }
+
+  async fullTextSearch(query: string, collection?: string): Promise<DatabaseRecord[]> {
+    try {
+      const params = new URLSearchParams();
+      params.append('q', query);
+      if (collection) params.append('collection', collection);
+
+      const response = await axios.get(
+        `${this.baseURL}/search/text?${params.toString()}`,
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error performing full-text search:', error);
+      throw new Error('Failed to perform full-text search');
+    }
+  }
+
+  async getAnalytics(collection?: string): Promise<AnalyticsData> {
+    try {
+      const params = collection ? `?collection=${collection}` : '';
+      const response = await axios.get(
+        `${this.baseURL}/analytics${params}`,
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error getting analytics:', error);
+      throw new Error('Failed to get analytics');
+    }
+  }
+
+  async bulkCreate(collection: string, records: Array<{ data: any; tags: string[] }>): Promise<DatabaseRecord[]> {
+    try {
+      const response = await axios.post(
+        `${this.baseURL}/collections/${collection}/bulk`,
+        {
+          records: records.map(record => ({
+            ...record,
+            createdBy: this.userEmail
+          }))
+        },
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error bulk creating data:', error);
+      throw new Error('Failed to bulk create data');
+    }
+  }
+
+  async bulkUpdate(updates: Array<{ id: string; data: any; tags?: string[] }>): Promise<DatabaseRecord[]> {
+    try {
+      const response = await axios.put(
+        `${this.baseURL}/records/bulk`,
+        {
+          updates: updates.map(update => ({
+            ...update,
+            updatedBy: this.userEmail
+          }))
+        },
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error bulk updating data:', error);
+      throw new Error('Failed to bulk update data');
+    }
+  }
+
+  async bulkDelete(recordIds: string[]): Promise<boolean> {
+    try {
+      await axios.delete(
+        `${this.baseURL}/records/bulk`,
+        {
+          headers: this.getHeaders(),
+          data: { recordIds }
+        }
+      );
+      return true;
+    } catch (error) {
+      console.error('Error bulk deleting data:', error);
+      throw new Error('Failed to bulk delete data');
+    }
+  }
+
+  async exportData(collection: string, format: 'json' | 'csv' | 'xlsx' = 'json'): Promise<Blob> {
+    try {
+      const response = await axios.get(
+        `${this.baseURL}/collections/${collection}/export?format=${format}`,
+        {
+          headers: this.getHeaders(),
+          responseType: 'blob'
+        }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error exporting data:', error);
+      throw new Error('Failed to export data');
+    }
+  }
+
+  async importData(collection: string, file: File, options: { overwrite?: boolean; tags?: string[] } = {}): Promise<{ success: number; errors: number; details: any[] }> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('options', JSON.stringify({
+        ...options,
+        createdBy: this.userEmail
+      }));
+
+      const response = await axios.post(
+        `${this.baseURL}/collections/${collection}/import`,
+        formData,
+        {
+          headers: {
+            ...this.getHeaders(),
+            'Content-Type': 'multipart/form-data'
+          }
+        }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error importing data:', error);
+      throw new Error('Failed to import data');
+    }
+  }
+
+  async createBackup(collections?: string[]): Promise<{ backupId: string; downloadUrl: string }> {
+    try {
+      const response = await axios.post(
+        `${this.baseURL}/backup`,
+        {
+          collections,
+          createdBy: this.userEmail
+        },
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error creating backup:', error);
+      throw new Error('Failed to create backup');
+    }
+  }
+
+  async restoreBackup(backupId: string): Promise<boolean> {
+    try {
+      await axios.post(
+        `${this.baseURL}/backup/${backupId}/restore`,
+        { restoredBy: this.userEmail },
+        { headers: this.getHeaders() }
+      );
+      return true;
+    } catch (error) {
+      console.error('Error restoring backup:', error);
+      throw new Error('Failed to restore backup');
+    }
+  }
+
+  async getCollections(): Promise<Array<{ name: string; recordCount: number; lastModified: string }>> {
+    try {
+      const response = await axios.get(
+        `${this.baseURL}/collections`,
+        { headers: this.getHeaders() }
+      )
+      return response.data;
+    } catch (error) {
+      console.error('Error getting collections:', error);
+      throw new Error('Failed to get collections');
+    }
+  }
+
+  async createCollection(name: string, schema?: any): Promise<{ name: string; created: boolean }> {
+    try {
+      const response = await axios.post(
+        `${this.baseURL}/collections`,
+        {
+          name,
+          schema,
+          createdBy: this.userEmail
+        },
+        { headers: this.getHeaders() }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error creating collection:', error);
+      throw new Error('Failed to create collection');
+    }
+  }
+
+  async deleteCollection(name: string): Promise<boolean> {
+    try {
+      await axios.delete(
+        `${this.baseURL}/collections/${name}`,
+        { headers: this.getHeaders() }
+      );
+      return true;
+    } catch (error) {
+      console.error('Error deleting collection:', error);
+      throw new Error('Failed to delete collection');
+    }
+  }
+
+  async getQuotes(filters?: { status?: string; dateRange?: { start: string; end: string } }): Promise<DatabaseRecord[]> {
+    return this.readData('quotes', {
+      filters,
+      sortBy: 'createdAt',
+      sortOrder: 'desc'
     });
   }
 
-  async getAnalytics(): Promise<AnalyticsData> {
+  async createQuote(quoteData: any): Promise<DatabaseRecord> {
+    return this.createData('quotes', quoteData, ['quote', 'freight']);
+  }
+
+  async updateQuoteStatus(quoteId: string, status: string): Promise<DatabaseRecord> {
+    return this.updateData(quoteId, { status, updatedAt: new Date().toISOString() }, ['quote', 'status-update']);
+  }
+
+  async getShipments(filters?: { status?: string; customerId?: string }): Promise<DatabaseRecord[]> {
+    return this.readData('shipments', {
+      filters,
+      sortBy: 'createdAt',
+      sortOrder: 'desc'
+    });
+  }
+
+  async createShipment(shipmentData: any): Promise<DatabaseRecord> {
+    return this.createData('shipments', shipmentData, ['shipment', 'freight']);
+  }
+
+  async updateShipmentStatus(shipmentId: string, status: string, location?: string): Promise<DatabaseRecord> {
+    const updateData = {
+      status,
+      updatedAt: new Date().toISOString(),
+      ...(location && { currentLocation: location })
+    };
+    return this.updateData(shipmentId, updateData, ['shipment', 'tracking-update']);
+  }
+
+  async getCustomers(searchTerm?: string): Promise<DatabaseRecord[]> {
+    if (searchTerm) {
+      return this.fullTextSearch(searchTerm, 'customers');
+    }
+    return this.readData('customers', {
+      sortBy: 'name',
+      sortOrder: 'asc'
+    });
+  }
+
+  async createCustomer(customerData: any): Promise<DatabaseRecord> {
+    return this.createData('customers', customerData, ['customer', 'contact']);
+  }
+
+  async updateCustomer(customerId: string, customerData: any): Promise<DatabaseRecord> {
+    return this.updateData(customerId, customerData, ['customer', 'contact']);
+  }
+
+  async getVendors(searchTerm?: string): Promise<DatabaseRecord[]> {
+    if (searchTerm) {
+      return this.fullTextSearch(searchTerm, 'vendors');
+    }
+    return this.readData('vendors', {
+      sortBy: 'name',
+      sortOrder: 'asc'
+    });
+  }
+
+  async createVendor(vendorData: any): Promise<DatabaseRecord> {
+    return this.createData('vendors', vendorData, ['vendor', 'supplier']);
+  }
+
+  async updateVendor(vendorId: string, vendorData: any): Promise<DatabaseRecord> {
+    return this.updateData(vendorId, vendorData, ['vendor', 'supplier']);
+  }
+
+  async getReports(type?: string): Promise<DatabaseRecord[]> {
+    const filters = type ? { type } : undefined;
+    return this.readData('reports', {
+      filters,
+      sortBy: 'createdAt',
+      sortOrder: 'desc'
+    });
+  }
+
+  async generateReport(reportData: any): Promise<DatabaseRecord> {
+    return this.createData('reports', {
+      ...reportData,
+      generatedAt: new Date().toISOString(),
+      generatedBy: this.userEmail
+    }, ['report', reportData.type || 'general']);
+  }
+
+  async getDocuments(entityId?: string, entityType?: string): Promise<DatabaseRecord[]> {
+    const filters: any = {};
+    if (entityId) filters.entityId = entityId;
+    if (entityType) filters.entityType = entityType;
+    
+    return this.readData('documents', {
+      filters: Object.keys(filters).length > 0 ? filters : undefined,
+      sortBy: 'createdAt',
+      sortOrder: 'desc'
+    });
+  }
+
+  async uploadDocument(documentData: any, file?: File): Promise<DatabaseRecord> {
+    if (file) {
+      // In a real implementation, you would upload the file to a storage service
+      // and store the URL in the document data
+      documentData.fileUrl = `https://storage.example.com/documents/${file.name}`;
+      documentData.fileName = file.name;
+      documentData.fileSize = file.size;
+      documentData.mimeType = file.type;
+    }
+    
+    return this.createData('documents', documentData, ['document', documentData.type || 'general']);
+  }
+
+  async getNotifications(userId?: string): Promise<DatabaseRecord[]> {
+    const filters = userId ? { userId } : undefined;
+    return this.readData('notifications', {
+      filters,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+      limit: 50
+    });
+  }
+
+  async createNotification(notificationData: any): Promise<DatabaseRecord> {
+    return this.createData('notifications', {
+      ...notificationData,
+      createdAt: new Date().toISOString(),
+      read: false
+    }, ['notification', notificationData.type || 'general']);
+  }
+
+  async markNotificationAsRead(notificationId: string): Promise<DatabaseRecord> {
+    return this.updateData(notificationId, {
+      read: true,
+      readAt: new Date().toISOString()
+    }, ['notification', 'read']);
+  }
+
+  async getDashboardMetrics(): Promise<any> {
     try {
-      const quotesResponse = await this.readData("quote_requests", undefined, 1000, 0);
-      const quotesData = quotesResponse.data || [];
-
-      const totalQuotes = quotesData.length;
-      const approvedQuotes = quotesData.filter((q: any) => q.data.status === "approved").length;
-      const rejectedQuotes = quotesData.filter((q: any) => q.data.status === "rejected").length;
-      const pendingQuotes = quotesData.filter((q: any) => q.data.status === "pending").length;
-      const conversionRate = totalQuotes > 0 ? (approvedQuotes / totalQuotes) * 100 : 0;
-
-      const serviceMetrics = this.calculateServiceMetrics(quotesData);
-      const customerMetrics = this.calculateCustomerMetrics(quotesData);
-      const revenueForecasting = this.calculateRevenueForecast(quotesData);
+      // This would typically aggregate data from multiple collections
+      const [shipments, customers, vendors, revenue] = await Promise.all([
+        this.readData('shipments', { limit: 1000 }),
+        this.readData('customers'),
+        this.readData('vendors'),
+        this.readData('financial_records', { filters: { type: 'revenue' } })
+      ]);
 
       return {
-        conversionRate,
-        totalQuotes,
-        approvedQuotes,
-        rejectedQuotes,
-        pendingQuotes,
-        averageQuoteValue: 1500,
-        topServices: serviceMetrics,
-        customerMetrics,
-        revenueForecasting
+        totalShipments: shipments.length,
+        activeShipments: shipments.filter(s => s.data.status === 'in_transit').length,
+        totalCustomers: customers.length,
+        totalVendors: vendors.length,
+        totalRevenue: revenue.reduce((sum, r) => sum + (r.data.amount || 0), 0),
+        recentShipments: shipments.slice(0, 10)
       };
     } catch (error) {
-      return {
-        conversionRate: 0,
-        totalQuotes: 0,
-        approvedQuotes: 0,
-        rejectedQuotes: 0,
-        pendingQuotes: 0,
-        averageQuoteValue: 0,
-        topServices: [],
-        customerMetrics: [],
-        revenueForecasting: []
-      };
+      console.error('Error getting dashboard metrics:', error);
+      throw new Error('Failed to get dashboard metrics');
     }
-  }
-
-  private calculateServiceMetrics(quotes: any[]): any[] {
-    const services: any = {};
-    
-    quotes.forEach((quote: any) => {
-      const service = quote.data.service;
-      if (!services[service]) {
-        services[service] = { quoteCount: 0, approved: 0, totalValue: 0 };
-      }
-      services[service].quoteCount++;
-      if (quote.data.status === "approved") {
-        services[service].approved++;
-        services[service].totalValue += 1500;
-      }
-    });
-
-    return Object.keys(services).map(key => ({
-      serviceName: key,
-      quoteCount: services[key].quoteCount,
-      approvalRate: (services[key].approved / services[key].quoteCount) * 100,
-      averageValue: services[key].totalValue / services[key].approved || 0
-    }));
-  }
-
-  private calculateCustomerMetrics(quotes: any[]): any[] {
-    const customers: any = {};
-    
-    quotes.forEach((quote: any) => {
-      const email = quote.data.email;
-      if (!customers[email]) {
-        customers[email] = {
-          customerId: email,
-          customerName: quote.data.name,
-          totalQuotes: 0,
-          approvedQuotes: 0,
-          totalRevenue: 0,
-          lastActivity: quote.data.submittedAt
-        };
-      }
-      customers[email].totalQuotes++;
-      if (quote.data.status === "approved") {
-        customers[email].approvedQuotes++;
-        customers[email].totalRevenue += 1500;
-      }
-      if (new Date(quote.data.submittedAt) > new Date(customers[email].lastActivity)) {
-        customers[email].lastActivity = quote.data.submittedAt;
-      }
-    });
-
-    return Object.values(customers);
-  }
-
-  private calculateRevenueForecast(quotes: any[]): any[] {
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
-    return months.map(month => ({
-      month,
-      projected: Math.floor(Math.random() * 50000) + 30000,
-      actual: Math.floor(Math.random() * 45000) + 25000,
-      confidence: Math.floor(Math.random() * 20) + 80
-    }));
-  }
-
-  async createRealtimeUpdate(type: string, data: any, userId: string): Promise<DatabaseResponse> {
-    const update: RealtimeUpdate = {
-      id: `update_${Date.now()}`,
-      type,
-      data,
-      timestamp: new Date().toISOString(),
-      userId
-    };
-
-    return await this.createData("realtime_updates", update, ["realtime", type]);
-  }
-
-  async sendMessage(senderId: string, senderName: string, receiverId: string, content: string, attachments?: string[]): Promise<DatabaseResponse> {
-    const message: Message = {
-      id: `msg_${Date.now()}`,
-      senderId,
-      senderName,
-      receiverId,
-      content,
-      timestamp: new Date().toISOString(),
-      read: false,
-      attachments
-    };
-
-    return await this.createData("messages", message, ["message", "unread"]);
-  }
-
-  async updateShipmentTracking(trackingNumber: string, location: string, status: string, description: string): Promise<DatabaseResponse> {
-    const trackingResponse = await this.readData("shipment_tracking", undefined, 1, 0);
-    let tracking: ShipmentTracking;
-
-    if (trackingResponse.success && trackingResponse.data && trackingResponse.data.length > 0) {
-      tracking = trackingResponse.data[0].data;
-      tracking.updates.push({
-        location,
-        status,
-        timestamp: new Date().toISOString(),
-        description
-      });
-      tracking.currentLocation = location;
-      tracking.status = status;
-    } else {
-      tracking = {
-        trackingNumber,
-        status,
-        currentLocation: location,
-        estimatedDelivery: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
-        updates: [{ location, status, timestamp: new Date().toISOString(), description }],
-        realtime: true
-      };
-    }
-
-    return await this.createData("shipment_tracking", tracking, ["tracking", status]);
-  }
-
-  async generateReport(name: string, type: string, parameters: any, generatedBy: string, format: string): Promise<DatabaseResponse> {
-    const analyticsData = await this.getAnalytics();
-    
-    const report: Report = {
-      id: `report_${Date.now()}`,
-      name,
-      type,
-      parameters,
-      generatedAt: new Date().toISOString(),
-      generatedBy,
-      format,
-      data: analyticsData
-    };
-
-    return await this.createData("reports", report, ["report", type, format]);
-  }
-
-  async scheduleReport(reportConfig: Report): Promise<DatabaseResponse> {
-    return await this.createData("scheduled_reports", reportConfig, ["scheduled", "report"]);
   }
 }
+
+export default AdvancedDatabaseAPI;
